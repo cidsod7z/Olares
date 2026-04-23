@@ -1,0 +1,60 @@
+{{- if .Values.client }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rcv2bbig
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rcv2bbig
+  template:
+    metadata:
+      labels:
+        app: rcv2bbig
+    spec:
+      containers:
+        - name: client
+          image: nginx:1
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+{{- else if .Values.clientAndServer }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rcv2bbig
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rcv2bbig
+  template:
+    metadata:
+      labels:
+        app: rcv2bbig
+    spec:
+      containers:
+        - name: server
+          image: nginx:1
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+        - name: client
+          image: nginx:1
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+{{- end }}
