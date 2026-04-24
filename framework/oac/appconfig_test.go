@@ -3,6 +3,7 @@ package oac_test
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/beclab/Olares/framework/oac"
@@ -185,14 +186,17 @@ func TestValidateAppConfiguration_PackageLevelShortcut(t *testing.T) {
 // TestLoadAppConfiguration_PropagatesParseError ensures that file-IO and
 // parser errors surface via the convenience loader (we don't swallow them
 // or wrap them in errAppConfigUnavailable by mistake).
+//
+// errAppConfigUnavailable is internal, so we pin the contract by its
+// message substring rather than by identity: the previous version
+// compared against a freshly-built errors.New(...) via errors.Is, which
+// never matched because each errors.New allocates a distinct value.
 func TestLoadAppConfiguration_PropagatesParseError(t *testing.T) {
 	_, err := oac.LoadAppConfiguration("/no/such/path/here")
 	if err == nil {
 		t.Fatal("expected error for missing path")
 	}
-	// errAppConfigUnavailable is internal; we only check that the error is
-	// not nil and not silently masking the IO failure.
-	if errors.Is(err, errors.New("oac: manifest is not backed by *AppConfiguration")) {
+	if strings.Contains(err.Error(), "manifest is not backed by *AppConfiguration") {
 		t.Fatalf("must surface IO error, not the type-assertion sentinel: %v", err)
 	}
 }

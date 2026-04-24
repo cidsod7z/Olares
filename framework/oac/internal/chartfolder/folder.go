@@ -168,14 +168,28 @@ func isValidFolderName(name string) bool {
 	return match
 }
 
+// fileExists reports whether p points to a regular (non-directory) file.
+// Any stat error - including "not exist" - is treated as "not a file".
+// The previous implementation also honoured os.IsExist(err), which both
+// rarely matches (os.Stat surfaces "not exist" errors, not "already
+// exists" errors) and is unsafe: on a hypothetical non-nil err where
+// os.IsExist(err) is true, info is nil and info.IsDir() panics.
 func fileExists(p string) bool {
 	info, err := os.Stat(p)
-	return (err == nil || os.IsExist(err)) && !info.IsDir()
+	if err != nil {
+		return false
+	}
+	return !info.IsDir()
 }
 
+// dirExists reports whether p points to a directory. See fileExists for
+// why a plain `err == nil` check is the correct gate.
 func dirExists(p string) bool {
 	info, err := os.Stat(p)
-	return (err == nil || os.IsExist(err)) && info.IsDir()
+	if err != nil {
+		return false
+	}
+	return info.IsDir()
 }
 
 // validCategories is duplicated here (rather than injected) because the

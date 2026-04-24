@@ -130,13 +130,22 @@ func collectRequestedRules(list kube.ResourceList, roleNames map[string]struct{}
 	return out
 }
 
+// rulesAllow reports whether request can be safely granted given the supplied
+// forbidden rules. It returns false (i.e. forbidden) as soon as ANY rule in
+// rules covers the request, and true only when none of them do.
+//
+// The previous implementation had the boolean flipped: it returned "allowed"
+// as soon as any forbidden rule FAILED to cover the request, which happened
+// to work when len(rules) == 1 (the default policy) but let matching requests
+// slip through as soon as a second, non-overlapping forbidden rule was
+// present.
 func rulesAllow(request *rbacv1.PolicyRule, rules ...rbacv1.PolicyRule) bool {
 	for i := range rules {
-		if !ruleAllows(request, &rules[i]) {
-			return true
+		if ruleAllows(request, &rules[i]) {
+			return false
 		}
 	}
-	return false
+	return true
 }
 
 func ruleAllows(request *rbacv1.PolicyRule, rule *rbacv1.PolicyRule) bool {
@@ -225,21 +234,44 @@ func resourceNameMatches(rule *rbacv1.PolicyRule, requested []string) bool {
 	return false
 }
 
+// nonResourceURLMatches reports whether rule covers every entry in requested.
+// A requested URL is considered covered when at least one URL in
+// rule.NonResourceURLs either (a) equals it, (b) is "*", or (c) is of the
+// form "prefix*" and the request starts with "prefix".
+//
+// The previous implementation nested the loops in the opposite order and
+// returned early whenever any ruleURL failed to cover a req, which meant a
+// rule containing two or more NonResourceURLs would reject requests that
+// were plainly covered by one of them.
 func nonResourceURLMatches(rule *rbacv1.PolicyRule, requested []string) bool {
-	if len(rule.NonResourceURLs) == 0 && len(requested) != 0 {
+	if len(requested) == 0 {
+		return true
+	}
+	if len(rule.NonResourceURLs) == 0 {
 		return false
 	}
-	for _, ruleURL := range rule.NonResourceURLs {
-		if ruleURL == rbacv1.NonResourceAll {
-			return true
-		}
-		for _, req := range requested {
-			if !funk.Contains(rule.NonResourceURLs, req) {
-				if !(strings.HasSuffix(ruleURL, "*") && strings.HasPrefix(req, strings.TrimRight(ruleURL, "*"))) {
-					return false
-				}
-			}
+	for _, req := range requested {
+		if !nonResourceURLCoveredBy(req, rule.NonResourceURLs) {
+			return false
 		}
 	}
 	return true
+}
+
+func nonResourceURLCoveredBy(req string, ruleURLs []string) bool {
+	for _, ruleURL := range ruleURLs {
+		if ruleURL == rbacv1.NonResourceAll {
+			return true
+		}
+		if ruleURL == req {
+			return true
+		}
+		if strings.HasSuffix(ruleURL, "*") {
+			prefix := strings.TrimSuffix(ruleURL, "*")
+			if strings.HasPrefix(req, prefix) {
+				return true
+			}
+		}
+	}
+	return false
 }

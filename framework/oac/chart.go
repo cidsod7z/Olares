@@ -251,8 +251,20 @@ func (c *OAC) ValidateManifestContent(content []byte) error {
 // so there is nothing to compare container limits against.
 func (c *OAC) checkResourceLimits(oacPath string, m Manifest, sc ownerScenario, defaultList kube.ResourceList) error {
 	cfg, ok := m.Raw().(*manifest.AppConfiguration)
-	if !ok || !manifest.IsModernResourcesManifest(cfg.ConfigVersion) {
-		return resources.CheckResourceLimits(defaultList, extractResourceLimits(m))
+	if !ok {
+		// A future Strategy whose Raw() is not *AppConfiguration would
+		// silently bypass the entire limit check if we kept the legacy
+		// "fall through to zero limits" behaviour. Surface a hard error
+		// instead so the caller cannot miss the drift.
+		return fmt.Errorf("oac: cannot check resource limits, manifest Raw() is not *AppConfiguration (got %T)", m.Raw())
+	}
+	if !manifest.IsModernResourcesManifest(cfg.ConfigVersion) {
+		return resources.CheckResourceLimits(defaultList, resources.ResourceLimits{
+			RequiredCPU:    cfg.Spec.RequiredCPU,
+			RequiredMemory: cfg.Spec.RequiredMemory,
+			LimitedCPU:     cfg.Spec.LimitedCPU,
+			LimitedMemory:  cfg.Spec.LimitedMemory,
+		})
 	}
 	if len(cfg.Spec.Resources) == 0 {
 		return nil
@@ -316,22 +328,6 @@ func resourceLimitsFromRequirement(rr manifest.ResourceRequirement) resources.Re
 		LimitedCPU:     rr.LimitedCPU,
 		LimitedMemory:  rr.LimitedMemory,
 	}
-}
-
-// extractResourceLimits projects the manifest spec CPU/memory fields into the
-// version-agnostic ResourceLimits DTO used by legacy manifests. Non-v1
-// Raw() types and modern manifests (whose flat fields must be empty per
-// Rule 7) are treated as having no declared limits.
-func extractResourceLimits(m Manifest) resources.ResourceLimits {
-	if cfg, ok := m.Raw().(*manifest.AppConfiguration); ok {
-		return resources.ResourceLimits{
-			RequiredCPU:    cfg.Spec.RequiredCPU,
-			RequiredMemory: cfg.Spec.RequiredMemory,
-			LimitedCPU:     cfg.Spec.LimitedCPU,
-			LimitedMemory:  cfg.Spec.LimitedMemory,
-		}
-	}
-	return resources.ResourceLimits{}
 }
 
 // extractUploadDest pulls the options.upload.dest field out of the active

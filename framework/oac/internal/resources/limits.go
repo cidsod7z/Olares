@@ -27,26 +27,25 @@ type ResourceLimits struct {
 // CheckResourceLimits validates requests/limits on every container of every
 // workload in list against the manifest-level limits carried by limits. All
 // violations are collected and returned as an aggregated error.
+//
+// All comparisons use resource.Quantity arithmetic (Add/Cmp) to avoid the
+// precision loss that AsApproximateFloat64 imposed on very large aggregates,
+// matching the way kube-scheduler reasons about these quantities.
 func CheckResourceLimits(list kube.ResourceList, limits ResourceLimits) error {
 	var errs []error
-	rcpu, _ := resource.ParseQuantity(limits.RequiredCPU)
-	rmem, _ := resource.ParseQuantity(limits.RequiredMemory)
-	lcpu, _ := resource.ParseQuantity(limits.LimitedCPU)
-	lmem, _ := resource.ParseQuantity(limits.LimitedMemory)
+	appRCPU, _ := resource.ParseQuantity(limits.RequiredCPU)
+	appRMem, _ := resource.ParseQuantity(limits.RequiredMemory)
+	appLCPU, _ := resource.ParseQuantity(limits.LimitedCPU)
+	appLMem, _ := resource.ParseQuantity(limits.LimitedMemory)
 
-	appRequiredCPU := rcpu.AsApproximateFloat64()
-	appRequiredMemory := rmem.AsApproximateFloat64()
-	appLimitedCPU := lcpu.AsApproximateFloat64()
-	appLimitedMemory := lmem.AsApproximateFloat64()
-
-	if appRequiredCPU > appLimitedCPU {
+	if appRCPU.Cmp(appLCPU) > 0 {
 		errs = append(errs, fmt.Errorf("spec.requiredCpu should be <= spec.limitedCpu"))
 	}
-	if appRequiredMemory > appLimitedMemory {
+	if appRMem.Cmp(appLMem) > 0 {
 		errs = append(errs, fmt.Errorf("spec.requiredMemory should be <= spec.limitedMemory"))
 	}
 
-	limitCPU, limitMemory, requiredCPU, requiredMemory := 0.0, 0.0, 0.0, 0.0
+	var sumReqCPU, sumReqMem, sumLimCPU, sumLimMem resource.Quantity
 
 	walkPodContainers(list, func(kind, wlName string, c corev1.Container) {
 		requests := c.Resources.Requests
@@ -60,35 +59,35 @@ func CheckResourceLimits(list kube.ResourceList, limits ResourceLimits) error {
 		if requests.Memory().IsZero() {
 			errs = append(errs, fmt.Errorf("%s: %s, container: %s must set memory request", kind, wlName, c.Name))
 		} else {
-			requiredMemory += requests.Memory().AsApproximateFloat64()
+			sumReqMem.Add(*requests.Memory())
 		}
 		if requests.Cpu().IsZero() {
 			errs = append(errs, fmt.Errorf("%s: %s, container: %s must set cpu request", kind, wlName, c.Name))
 		} else {
-			requiredCPU += requests.Cpu().AsApproximateFloat64()
+			sumReqCPU.Add(*requests.Cpu())
 		}
 		if cLimits.Memory().IsZero() {
 			errs = append(errs, fmt.Errorf("%s: %s, container: %s must set memory limit", kind, wlName, c.Name))
 		} else {
-			limitMemory += cLimits.Memory().AsApproximateFloat64()
+			sumLimMem.Add(*cLimits.Memory())
 		}
 		if cLimits.Cpu().IsZero() {
 			errs = append(errs, fmt.Errorf("%s: %s, container: %s must set cpu limit", kind, wlName, c.Name))
 		} else {
-			limitCPU += cLimits.Cpu().AsApproximateFloat64()
+			sumLimCPU.Add(*cLimits.Cpu())
 		}
 	})
 
-	if limitCPU > appLimitedCPU {
+	if sumLimCPU.Cmp(appLCPU) > 0 {
 		errs = append(errs, fmt.Errorf("sum of container resources.limits.cpu must be <= spec.limitedCpu"))
 	}
-	if limitMemory > appLimitedMemory {
+	if sumLimMem.Cmp(appLMem) > 0 {
 		errs = append(errs, fmt.Errorf("sum of container resources.limits.memory must be <= spec.limitedMemory"))
 	}
-	if requiredCPU > appRequiredCPU {
+	if sumReqCPU.Cmp(appRCPU) > 0 {
 		errs = append(errs, fmt.Errorf("sum of container resources.requests.cpu must be <= spec.requiredCpu"))
 	}
-	if requiredMemory > appRequiredMemory {
+	if sumReqMem.Cmp(appRMem) > 0 {
 		errs = append(errs, fmt.Errorf("sum of container resources.requests.memory must be <= spec.requiredMemory"))
 	}
 	return errors.Join(errs...)

@@ -93,14 +93,17 @@ func goodContainer(name, cpuReq, cpuLim, memReq, memLim string, mounts ...corev1
 
 // ---- ExtractWorkloadImages ----
 
-func TestExtractWorkloadImages_AllKinds(t *testing.T) {
+// TestExtractWorkloadImages_DeploymentAndStatefulSet documents that only
+// Deployment and StatefulSet images feed the output, matching the workload
+// kinds walkPodContainers actually inspects. DaemonSet is intentionally
+// skipped; see TestExtractWorkloadImages_SkipsDaemonSet.
+func TestExtractWorkloadImages_DeploymentAndStatefulSet(t *testing.T) {
 	list := kube.ResourceList{
 		newDeployment("a", corev1.Container{Image: "img/a:1"}),
 		newStatefulSet("b", corev1.Container{Image: "img/b:1"}),
-		newDaemonSet("c", corev1.Container{Image: "img/c:1"}),
 	}
 	got := ExtractWorkloadImages(list)
-	want := []string{"img/a:1", "img/b:1", "img/c:1"}
+	want := []string{"img/a:1", "img/b:1"}
 	if len(got) != len(want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
@@ -108,6 +111,21 @@ func TestExtractWorkloadImages_AllKinds(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("got %v, want %v", got, want)
 		}
+	}
+}
+
+// TestExtractWorkloadImages_SkipsDaemonSet pins the behaviour that keeps
+// image scanning aligned with the resource-limits / upload-mount checks in
+// walkPodContainers: a DaemonSet would slip past those checks, so its
+// images must not appear in the pull list either.
+func TestExtractWorkloadImages_SkipsDaemonSet(t *testing.T) {
+	list := kube.ResourceList{
+		newDeployment("a", corev1.Container{Image: "img/a:1"}),
+		newDaemonSet("d", corev1.Container{Image: "img/d:1"}),
+	}
+	got := ExtractWorkloadImages(list)
+	if len(got) != 1 || got[0] != "img/a:1" {
+		t.Fatalf("DaemonSet image leaked into output: %v", got)
 	}
 }
 
@@ -407,6 +425,71 @@ func TestCheckServiceAccountRules_AllowsBenignBoundRole(t *testing.T) {
 	forbidden, _ := LoadForbiddenRules("")
 	if err := CheckServiceAccountRules(list, forbidden); err != nil {
 		t.Fatalf("benign bound role must pass: %v", err)
+	}
+}
+
+// TestCheckServiceAccountRules_RejectsForbidden covers the positive-side hole
+// that let B5 (flipped rulesAllow boolean) slip through review: a Role bound
+// to a ServiceAccount that asks for "delete nodes" — which the default
+// policy forbids — MUST return an error.
+func TestCheckServiceAccountRules_RejectsForbidden(t *testing.T) {
+	list := kube.ResourceList{
+		roleWith("bad", rbacv1.PolicyRule{
+			APIGroups: []string{""}, Resources: []string{"nodes"}, Verbs: []string{"delete"},
+		}),
+		roleBindingFor("rb", "bad"),
+	}
+	forbidden, _ := LoadForbiddenRules("")
+	if err := CheckServiceAccountRules(list, forbidden); err == nil {
+		t.Fatal("delete-nodes request should be flagged against the default forbidden policy")
+	}
+}
+
+// TestCheckServiceAccountRules_RejectsForbiddenWithMultipleRules is the
+// regression test for B5: when the forbidden policy contains more than one
+// rule, a request that matches ONE of them must still be rejected. Before
+// the fix, rulesAllow returned "allowed" as soon as any forbidden rule
+// failed to cover the request, so this test would have passed silently.
+func TestCheckServiceAccountRules_RejectsForbiddenWithMultipleRules(t *testing.T) {
+	list := kube.ResourceList{
+		roleWith("bad", rbacv1.PolicyRule{
+			APIGroups: []string{""}, Resources: []string{"nodes"}, Verbs: []string{"delete"},
+		}),
+		roleBindingFor("rb", "bad"),
+	}
+	forbidden := []rbacv1.PolicyRule{
+		{APIGroups: []string{"*"}, Resources: []string{"nodes"}, Verbs: []string{"delete"}},
+		// A second, unrelated forbidden rule that does NOT cover the
+		// request. The old implementation would short-circuit here and
+		// wrongly report "allowed".
+		{APIGroups: []string{"*"}, Resources: []string{"networkpolicies"}, Verbs: []string{"create"}},
+	}
+	if err := CheckServiceAccountRules(list, forbidden); err == nil {
+		t.Fatal("delete-nodes request should still be flagged when a second, non-matching forbidden rule is present")
+	}
+}
+
+// TestCheckServiceAccountRules_AllowsRequestCoveredByOneNonResourceURL is a
+// B6 regression test: a forbidden rule that grants /metrics and /healthz/*
+// must not reject a request for /healthz/live just because /metrics does
+// not cover it. Under the old loop ordering, the check short-circuited on
+// the first non-matching ruleURL.
+func TestCheckServiceAccountRules_AllowsRequestCoveredByOneNonResourceURL(t *testing.T) {
+	list := kube.ResourceList{
+		roleWith("probe", rbacv1.PolicyRule{
+			Verbs:           []string{"get"},
+			NonResourceURLs: []string{"/healthz/live"},
+		}),
+		roleBindingFor("rb", "probe"),
+	}
+	// A forbidden rule that DOES cover /healthz/live via the wildcard.
+	// The request should be rejected.
+	forbidden := []rbacv1.PolicyRule{{
+		Verbs:           []string{"get"},
+		NonResourceURLs: []string{"/metrics", "/healthz/*"},
+	}}
+	if err := CheckServiceAccountRules(list, forbidden); err == nil {
+		t.Fatal("request on /healthz/live should be covered by the /healthz/* wildcard and therefore flagged")
 	}
 }
 

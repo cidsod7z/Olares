@@ -134,7 +134,7 @@ func TestSinglePipeline_IgnoresRenderer(t *testing.T) {
 		t.Fatalf("Parse should forward raw verbatim, got %q", s.parseCalls)
 	}
 
-	if err := p.Validate(raw, render, "user", "admin"); err != nil {
+	if err := p.Validate(raw, nil, render, "user", "admin"); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
 	if rendererCalled {
@@ -142,6 +142,44 @@ func TestSinglePipeline_IgnoresRenderer(t *testing.T) {
 	}
 	if len(s.validCalls) != 1 {
 		t.Fatalf("Validate should call Strategy.Validate exactly once, got %d", len(s.validCalls))
+	}
+}
+
+// TestSinglePipeline_ValidateReusesParsedManifest is the regression test for
+// P1: when Validate is handed the Manifest produced by a prior Parse, it
+// must NOT ask the strategy to parse the raw bytes a second time. Before
+// this optimization, Lint/ValidateManifestContent parsed the modern
+// manifest twice end-to-end.
+func TestSinglePipeline_ValidateReusesParsedManifest(t *testing.T) {
+	s := &fakeStrategy{}
+	p := singlePipeline{strat: s}
+
+	parsed := &fakeManifest{apiVersion: "v1"}
+	if err := p.Validate([]byte("raw"), parsed, nil, "", ""); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if len(s.parseCalls) != 0 {
+		t.Fatalf("expected zero Strategy.Parse calls when a parsed manifest is supplied, got %d", len(s.parseCalls))
+	}
+	if len(s.validCalls) != 1 || s.validCalls[0] != parsed {
+		t.Fatalf("Strategy.Validate must receive the supplied parsed manifest, got %+v", s.validCalls)
+	}
+}
+
+// TestSinglePipeline_ValidateFallsBackToParse keeps the old behaviour alive
+// for callers that don't (yet) have a pre-parsed Manifest handy.
+func TestSinglePipeline_ValidateFallsBackToParse(t *testing.T) {
+	s := &fakeStrategy{}
+	p := singlePipeline{strat: s}
+
+	if err := p.Validate([]byte("hello"), nil, nil, "", ""); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if len(s.parseCalls) != 1 || string(s.parseCalls[0]) != "hello" {
+		t.Fatalf("expected Strategy.Parse on the raw bytes, got %q", s.parseCalls)
+	}
+	if len(s.validCalls) != 1 {
+		t.Fatalf("Strategy.Validate should run once, got %d", len(s.validCalls))
 	}
 }
 
@@ -208,7 +246,7 @@ func TestDualOwnerPipeline_ValidateRunsBothScenarios(t *testing.T) {
 		return []byte("ok"), nil
 	}
 
-	if err := p.Validate([]byte("raw"), render, "alice", "root"); err != nil {
+	if err := p.Validate([]byte("raw"), nil, render, "alice", "root"); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
 
@@ -240,7 +278,7 @@ func TestDualOwnerPipeline_ValidateFallbackDefaults(t *testing.T) {
 		calls = append(calls, [2]string{owner, admin})
 		return []byte("ok"), nil
 	}
-	if err := p.Validate([]byte("raw"), render, "", ""); err != nil {
+	if err := p.Validate([]byte("raw"), nil, render, "", ""); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
 	if len(calls) != 2 {
@@ -267,7 +305,7 @@ func TestDualOwnerPipeline_ValidateAggregatesErrors(t *testing.T) {
 	render := func(_ []byte, _, _ string) ([]byte, error) {
 		return []byte("ok"), nil
 	}
-	err := p.Validate([]byte("raw"), render, "alice", "root")
+	err := p.Validate([]byte("raw"), nil, render, "alice", "root")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -289,7 +327,7 @@ func TestDualOwnerPipeline_ValidateContinuesPastParseError(t *testing.T) {
 		}
 		return []byte("ok"), nil
 	}
-	err := p.Validate([]byte("raw"), render, "alice", "root")
+	err := p.Validate([]byte("raw"), nil, render, "alice", "root")
 	if err == nil {
 		t.Fatal("expected an error")
 	}
@@ -303,8 +341,28 @@ func TestDualOwnerPipeline_ValidateContinuesPastParseError(t *testing.T) {
 
 func TestDualOwnerPipeline_ValidateNilRenderer(t *testing.T) {
 	p := dualOwnerPipeline{strat: &fakeStrategy{}}
-	err := p.Validate([]byte("x"), nil, "", "")
+	err := p.Validate([]byte("x"), nil, nil, "", "")
 	if !errors.Is(err, ErrNilRenderer) {
 		t.Fatalf("expected ErrNilRenderer, got %v", err)
+	}
+}
+
+// TestDualOwnerPipeline_ValidateIgnoresParsedManifest documents that the
+// legacy pipeline cannot reuse the caller's parsed manifest: Validate runs
+// two scenarios with synthesized (owner, admin) values of its own, so both
+// scenarios must still go through render → Parse → Validate from raw.
+func TestDualOwnerPipeline_ValidateIgnoresParsedManifest(t *testing.T) {
+	s := &fakeStrategy{manifest: &fakeManifest{apiVersion: "v1"}}
+	p := dualOwnerPipeline{strat: s}
+
+	render := func(_ []byte, _, _ string) ([]byte, error) {
+		return []byte("ok"), nil
+	}
+	parsed := &fakeManifest{apiVersion: "v1"}
+	if err := p.Validate([]byte("raw"), parsed, render, "alice", "root"); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if len(s.parseCalls) != 2 {
+		t.Fatalf("legacy pipeline must still Parse once per scenario, got %d", len(s.parseCalls))
 	}
 }

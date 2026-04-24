@@ -8,10 +8,16 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 )
 
-// ExtractWorkloadImages walks Deployment / StatefulSet / DaemonSet resources
-// in list and returns the distinct set of container images declared on the
-// primary Pod template (initContainers are not included, per the "basic"
-// decision in the refactor plan).
+// ExtractWorkloadImages walks Deployment and StatefulSet resources in list
+// and returns the distinct set of container images declared on the primary
+// Pod template (initContainers are not included, per the "basic" decision
+// in the refactor plan).
+//
+// DaemonSet is intentionally skipped: the resource-limits and upload-mount
+// checks in walkPodContainers only inspect Deployment / StatefulSet, and the
+// image listing must stay aligned with the set of workloads that actually
+// go through lint — otherwise a DaemonSet could contribute images to the
+// pull list while silently bypassing every other resource-level check.
 //
 // The returned slice is deterministic: sorted alphabetically with duplicates
 // collapsed.
@@ -36,16 +42,6 @@ func ExtractWorkloadImages(list kube.ResourceList) []string {
 				continue
 			}
 			for _, c := range sts.Spec.Template.Spec.Containers {
-				if c.Image != "" {
-					set[c.Image] = struct{}{}
-				}
-			}
-		case KindDaemonSet:
-			var ds appsv1.DaemonSet
-			if err := scheme.Scheme.Convert(r.Object, &ds, nil); err != nil {
-				continue
-			}
-			for _, c := range ds.Spec.Template.Spec.Containers {
 				if c.Image != "" {
 					set[c.Image] = struct{}{}
 				}

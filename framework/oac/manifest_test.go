@@ -36,12 +36,18 @@ func TestRenderManifestTemplate_FallsBackToDefaults(t *testing.T) {
 	}
 }
 
-func TestLintBothOwnerScenarios_RequiresArguments(t *testing.T) {
+// TestLintBothOwnerScenarios_BadPath documents that LintBothOwnerScenarios
+// does not silently succeed when the target directory is missing: the
+// folder-layout check (which runs before any owner-scenario expansion)
+// still trips and surfaces a real error to the caller.
+//
+// The previous version of this test double-asserted "empty admin must
+// error" / "empty user must error" against the same bogus path, but
+// today the API does not require admin or user arguments — the two
+// identical branches were leftover from an earlier signature.
+func TestLintBothOwnerScenarios_BadPath(t *testing.T) {
 	if err := LintBothOwnerScenarios("/no/such/path"); err == nil {
-		t.Fatal("empty admin must error")
-	}
-	if err := LintBothOwnerScenarios("/no/such/path"); err == nil {
-		t.Fatal("empty user must error")
+		t.Fatal("expected error for a non-existent chart directory")
 	}
 }
 

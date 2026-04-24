@@ -45,9 +45,16 @@ type Strategy interface {
 type Renderer func(raw []byte, owner, admin string) ([]byte, error)
 
 // Pipeline is the version-aware manifest processing flow.
+//
+// Validate accepts an optional "parsed" argument — the Manifest produced by
+// a prior Parse call on the same raw bytes and (owner, admin) tuple. When
+// present, single-owner pipelines can skip the expensive re-parse step; for
+// pipelines whose validation runs under different (owner, admin) scenarios
+// than Parse did, the argument is ignored. Passing nil is always safe and
+// restores the "parse from raw" fallback.
 type Pipeline interface {
 	Parse(raw []byte, render Renderer, owner, admin string) (Manifest, error)
-	Validate(raw []byte, render Renderer, owner, admin string) error
+	Validate(raw []byte, parsed Manifest, render Renderer, owner, admin string) error
 	Strategy() Strategy
 }
 
@@ -76,10 +83,18 @@ func (p singlePipeline) Parse(raw []byte, _ Renderer, _, _ string) (Manifest, er
 	return p.strat.Parse(raw)
 }
 
-func (p singlePipeline) Validate(raw []byte, _ Renderer, _, _ string) error {
-	m, err := p.strat.Parse(raw)
-	if err != nil {
-		return err
+// Validate reuses parsed when the caller already parsed raw; the raw bytes
+// and their parse result cannot disagree in the single-owner flow (there is
+// no per-scenario render indirection), so a second Parse would be a pure
+// overhead. When parsed is nil we fall back to parsing raw ourselves.
+func (p singlePipeline) Validate(raw []byte, parsed Manifest, _ Renderer, _, _ string) error {
+	m := parsed
+	if m == nil {
+		var err error
+		m, err = p.strat.Parse(raw)
+		if err != nil {
+			return err
+		}
 	}
 	return p.strat.Validate(m)
 }
@@ -104,7 +119,11 @@ func (p dualOwnerPipeline) Parse(raw []byte, render Renderer, owner, admin strin
 	return p.strat.Parse(rendered)
 }
 
-func (p dualOwnerPipeline) Validate(raw []byte, render Renderer, owner, admin string) error {
+// Validate ignores the pre-parsed Manifest: the two scenarios it runs use
+// their own (owner, admin) values that intentionally differ from the ones
+// Parse was invoked with, so any manifest carried in from Parse would not
+// cover either scenario.
+func (p dualOwnerPipeline) Validate(raw []byte, _ Manifest, render Renderer, owner, admin string) error {
 	if render == nil {
 		return ErrNilRenderer
 	}

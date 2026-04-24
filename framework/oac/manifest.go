@@ -48,7 +48,12 @@ func PeekManifestVersions(content []byte) (ManifestVersions, error) {
 		return ManifestVersions{}, err
 	}
 	return ManifestVersions{
-		APIVersion:            h.APIVersion,
+		APIVersion: func() string {
+			if h.APIVersion == "" {
+				return "v1"
+			}
+			return h.APIVersion
+		}(),
 		OlaresManifestVersion: h.OlaresVersion,
 	}, nil
 }
@@ -109,7 +114,7 @@ func (c *OAC) validateManifestBytes(raw []byte, m Manifest) error {
 	if err != nil {
 		return err
 	}
-	if err := pipe.Validate(raw, c.manifestRenderer(), c.owner, c.admin); err != nil {
+	if err := pipe.Validate(raw, m, c.manifestRenderer(), c.owner, c.admin); err != nil {
 		return WrapValidation(m.APIVersion(), err)
 	}
 	return nil
