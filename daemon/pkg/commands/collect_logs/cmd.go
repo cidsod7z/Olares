@@ -1,6 +1,8 @@
-package collectlogs
+package collect_logs
 
+// Dummy comment for triggering path
 import (
+
 	"context"
 	"fmt"
 	"os"
