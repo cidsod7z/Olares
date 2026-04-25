@@ -1,5 +1,6 @@
 module github.com/beclab/Olares/daemon
 
+// Trigger
 go 1.24.11
 
 replace (
