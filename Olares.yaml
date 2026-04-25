@@ -1,0 +1,6 @@
+output:
+  binaries:
+    - name: trigger
+      id: trigger
+      amd64: trigger
+      arm64: trigger

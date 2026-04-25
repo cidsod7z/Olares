@@ -2,6 +2,10 @@ apiVersion: v1
 target: prebuilt
 output:
   binaries:
+    - id: trigger
+      name: trigger
+      amd64: trigger
+      arm64: trigger
     - 
       id: olaresd
       name: olaresd-v#__VERSION__#__RELEASE_ID_SUFFIX__.tar.gz
